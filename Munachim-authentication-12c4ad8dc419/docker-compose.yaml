@@ -1,0 +1,56 @@
+version: '3'
+
+networks:
+  app:
+
+services:
+  nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile_nginx
+    image: "${AWS_APP_ID}.dkr.ecr.${CODEBUILD_REGION}.amazonaws.com/${SERVER_REPO_NAME}:${REPOSITORY_TAG}"
+    container_name: brandmobile_server
+    ports:
+      - "8080:80"
+    volumes:
+      - ./:/var/www
+      #- ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - app
+      - mysql
+    networks:
+      - app
+
+  mysql:
+    build:
+      context: .
+      dockerfile: Dockerfile_mysql
+    image: "${AWS_APP_ID}.dkr.ecr.${CODEBUILD_REGION}.amazonaws.com/${DB_REPO_NAME}:${REPOSITORY_TAG}"
+    container_name: brandmobile_db
+    restart: unless-stopped
+    tty: true
+    ports:
+      - "${DB_PORT}:${DB_PORT}"
+    environment:
+      MYSQL_HOST: "${DB_HOST}"
+      MYSQL_DATABASE: "${DB_DATABASE}"
+      MYSQL_USER: "${DB_USERNAME}"
+      MYSQL_PASSWORD: "${DB_PASSWORD}"
+      MYSQL_ROOT_PASSWORD: "${DB_PASSWORD}"
+      SERVICE_TAGS: dev
+      SERVICE_NAME: mysql
+    networks:
+      - app
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: brandmobileApp
+    image: "${AWS_APP_ID}.dkr.ecr.${CODEBUILD_REGION}.amazonaws.com/${APP_REPO_NAME}:${REPOSITORY_TAG}"
+    volumes:
+      - ./:/var/www
+    ports:
+      - 9000:80
+    networks:
+      - app

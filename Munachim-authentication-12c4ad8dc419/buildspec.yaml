@@ -1,0 +1,74 @@
+version: 0.2
+env:
+  variables:
+    S3_ENVIRONMENT_BUCKET: "bm-environment-variables"
+    Project: "proxima"
+    Service: "authentication"
+    ENVIRONMENT_FILE: "env.prod"
+    folder: "authentication"
+    bucket: "proxima-appspec"
+    filename: "appspec.yaml"
+phases:
+  install:
+    runtime-versions:
+      php: 7.4
+    commands:
+      - |
+        #Update
+        apt-get update
+        # Install SQLITE3
+        apt-get install -y sqlite3
+        #Install composer
+        php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+        php composer-setup.php ;
+        php -r "unlink('composer-setup.php');" ;
+        mv composer.phar /usr/local/bin/composer
+      - echo logging in to Amazon ECR\
+      - aws --version
+      - echo $AWS_DEFAULT_REGION
+      - WEBSERVER_REPOSITORY_URL=559336548740.dkr.ecr.eu-west-1.amazonaws.com/brandmobile_server
+      - DB_REPOSITORY_URL=559336548740.dkr.ecr.eu-west-1.amazonaws.com/brandmobile_db
+      - RUNTIME_REPOSITORY_URI=559336548740.dkr.ecr.eu-west-1.amazonaws.com/brandmobile-app
+      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SERVICE_VERSION | cut -c 1-7)
+      - IMAGE_TAG=${COMMIT_HASH:=latest}
+      - aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin 559336548740.dkr.ecr.eu-west-1.amazonaws.com
+  build:
+    commands:
+      - echo Build started on `date`
+      - aws s3 cp s3://${S3_ENVIRONMENT_BUCKET}/${Project}/${Service}/${ENVIRONMENT_FILE} .env
+      - echo commit hash $COMMIT_HASH
+      - echo Installing composer deps
+      - composer install --ignore-platform-reqs
+      - aws s3 cp s3://bm-environment-variables/monnyme-remit/monnyremit-api/docker.key docker.key
+      - docker login -u bmafricadev --password-stdin < docker.key
+      - docker-compose build
+      - docker tag $RUNTIME_REPOSITORY_URI:laatest $RUNTIME_REPOSITORY_URI:$IMAGE_TAG
+      - docker tag $WEBSERVER_REPOSITORY_URL:laatest $WEBSERVER_REPOSITORY_URL:$IMAGE_TAG
+      - docker tag $DB_REPOSITORY_URL:laatest $DB_REPOSITORY_URL:$IMAGE_TAG
+  #      - touch database/database.sqlite
+  #      - php artisan migrate --database=sqlite --force
+  post_build:
+    commands:
+      - echo Build completed on `date`
+      - docker-compose push
+      - docker push $RUNTIME_REPOSITORY_URI:$IMAGE_TAG
+      - docker push $WEBSERVER_REPOSITORY_URL:$IMAGE_TAG
+      - docker push $DB_REPOSITORY_URL:$IMAGE_TAG
+      - echo copying yaml file
+      - aws s3 cp s3://${bucket}/${folder}/${filename} appspec.yaml
+      - echo creating image definition
+      - >
+        printf '[{"name": "gamification-webserver", "imageUri": "%s", "portMappings": [{ ":hostPort": 80} ]}, {"name": "gamification-runtime", "imageUri": "%s", "portMappings": [{ "hostPort": 9000 }]}, {"name": "worker", "imageUri": "%s", "portMappings": [{ "hostPort": 9000 }]}]' $RUNTIME_REPOSITORY_URI:$IMAGE_TAG $WEBSERVER_REPOSITORY_URL:$IMAGE_TAG $CRON_REPOSITORY_URL:$IMAGE_TAG > imageDefinition.json
+      - php artisan cache:clear
+      - echo migrating database
+      - php artisan migrate --force
+      # - php artisan passport:install
+      # Do you need to do this? In many cases phpunit will use sqlite or similar to avoid the need for a real DB.
+      # If you don't need it delete it
+      # - /usr/bin/mysql  -u root -e "GRANT ALL ON *.* TO 'test'@'localhost' IDENTIFIED BY '' WITH GRANT OPTION"
+      # - mysqladmin -u test create test
+#      - ./vendor/bin/phpunit
+artifacts:
+  files:
+    - appspec.yaml
+  discard-paths: yes
